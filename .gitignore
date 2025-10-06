@@ -1,0 +1,4 @@
+gnu-efi
+*.efi
+*.o
+*.so
