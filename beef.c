@@ -5,6 +5,9 @@
 struct {
     UINT32 width;
     UINT32 height;
+    UINT8 red_offset;
+    UINT8 green_offset;
+    UINT8 blue_offset;
     UINT32* pixels;
 } backbuffer;
 
@@ -17,6 +20,17 @@ EFI_GRAPHICS_OUTPUT_PROTOCOL* get_graphics() {
 }
 
 
+UINT8 find_pixel_offset(UINT32 mask) {
+    UINT8 offset = 0;
+    mask >>= 8;
+    while (mask > 0) {
+        offset += 8;
+        mask >>= 8;
+    }
+    return offset;
+}
+
+
 void select_graphics_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL* graphics) {
     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* mode_info = NULL;
     UINTN mode_info_size = 0;
@@ -25,10 +39,29 @@ void select_graphics_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL* graphics) {
     UINT32 max_resolution = 0;
     for (UINT32 mode = 0; mode < mode_count; mode++) {
         uefi_call_wrapper(graphics->QueryMode, 4, graphics, mode, &mode_info_size, &mode_info);
-        UINT32 resolution = mode_info->HorizontalResolution * mode_info->VerticalResolution;
+        UINT32 resolution = mode_info->PixelsPerScanLine * mode_info->VerticalResolution;
         if (resolution > max_resolution) {
-            backbuffer.width = mode_info->HorizontalResolution;
+            backbuffer.width = mode_info->PixelsPerScanLine;
             backbuffer.height = mode_info->VerticalResolution;
+            switch (mode_info->PixelFormat) {
+                case PixelBlueGreenRedReserved8BitPerColor: {
+                    backbuffer.red_offset = 16;
+                    backbuffer.green_offset = 8;
+                    backbuffer.blue_offset = 0;
+                    break;
+                }
+                case PixelBitMask: {
+                    backbuffer.red_offset = find_pixel_offset(mode_info->PixelInformation.RedMask);
+                    backbuffer.green_offset = find_pixel_offset(mode_info->PixelInformation.GreenMask);
+                    backbuffer.blue_offset = find_pixel_offset(mode_info->PixelInformation.BlueMask);
+                    break;
+                }
+                default: {
+                    backbuffer.red_offset = 0;
+                    backbuffer.green_offset = 8;
+                    backbuffer.blue_offset = 16;
+                }
+            }
             max_res_mode = mode;
             max_resolution = resolution;
         }
