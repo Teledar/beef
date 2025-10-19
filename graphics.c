@@ -1,6 +1,8 @@
 #include <efi.h>
 #include <efilib.h>
 
+#include "ascii_bitmap.c"
+
 typedef struct {
     EFI_GRAPHICS_OUTPUT_PROTOCOL* protocol;
     UINT32 width;
@@ -76,24 +78,78 @@ GraphicsOutput graphics_select_resolution(EFI_GRAPHICS_OUTPUT_PROTOCOL* protocol
 
 EFI_STATUS
 graphics_allocate_backbuffer(GraphicsOutput* output) {
+    if (output == NULL) return EFI_INVALID_PARAMETER;
     return uefi_call_wrapper(ST->BootServices->AllocatePool, 3,
         EfiLoaderData, output->width * output->height * 4, (VOID**)&output->backbuffer);
 }
 
 
 void graphics_free_backbuffer(GraphicsOutput* output) {
+    if (output == NULL || output->backbuffer == NULL) return;
     uefi_call_wrapper(ST->BootServices->FreePool, 1, (VOID*)output->backbuffer);
 }
 
 
-void graphics_blt_green(GraphicsOutput* output) {
+void graphics_fill_solid_color(GraphicsOutput* output, UINT32 color) {
+    if (output == NULL || output->backbuffer == NULL) return;
     UINT32 resolution = output->height * output->width;
     for (UINT32 y = 0; y < resolution; y+= output->width) {
         for (UINT32 x = 0; x < output->width; x++) {
-            output->backbuffer[y + x] = 0x0000ff00;
+            output->backbuffer[y + x] = color;
         }
     }
-    if (output->protocol == NULL) return;
+}
+
+
+void graphics_blt(GraphicsOutput* output) {
+    if (output == NULL || output->protocol == NULL || output->backbuffer == NULL) return;
     uefi_call_wrapper(output->protocol->Blt, 10, output->protocol, output->backbuffer, EfiBltBufferToVideo,
         0, 0, 0, 0, output->width, output->height, 0);
+}
+
+
+void graphics_draw_char(GraphicsOutput* output, UINT8 character, UINT32 color, INT32 x, INT32 y, UINT8 scale) {
+    if (output == NULL || output->protocol == NULL || output->backbuffer == NULL) return;
+    if (x + 8 >= output->width || y + 16 >= output->height) return;
+
+    if (character < 32) character = 32;
+    character -= 32;
+
+    UINT8 red_offset = output->red_offset;
+    UINT8 green_offset = output->green_offset;
+    UINT8 blue_offset = output->blue_offset;
+    UINT32* backbuffer = output->backbuffer;
+    UINT32 color_red = (color >> red_offset) & 255;
+    UINT32 color_green = (color >> green_offset) & 255;
+    UINT32 color_blue = (color >> blue_offset) & 255;
+    UINT32 screen_width = output->width;
+    UINT32 screen_height = output->height;
+    UINT32 screen_resolution = screen_height * screen_width;
+    INT32 bitmap_x_offset = character * 8;
+    INT32 bitmap_x_max = bitmap_x_offset + 8;
+    INT32 screen_y = y * screen_width;
+    INT32 screen_x = x;
+    for (UINT32 bitmap_y = 0; bitmap_y < 1792 * 16; bitmap_y += 1792) {
+        for (UINT32 bitmap_x = bitmap_x_offset; bitmap_x < bitmap_x_max; bitmap_x++) {
+            UINT8 bitmap_value = ascii_bitmap[bitmap_y + bitmap_x];
+            INT32 scaled_y = screen_y;
+            for (UINT8 i = 0; i < scale; i++) {
+                INT32 scaled_x = screen_x;
+                for (UINT8 j = 0; j < scale; j++) {
+                    if (scaled_y >= 0 && scaled_y < screen_resolution && scaled_x >= 0 && scaled_x < screen_width) {
+                        UINT32 pixel = backbuffer[scaled_y + scaled_x];
+                        UINT32 pixel_red = (((pixel >> red_offset) & 255) * (256 - bitmap_value) + color_red * bitmap_value) >> 8;
+                        UINT32 pixel_green = (((pixel >> green_offset) & 255) * (256 - bitmap_value) + color_green * bitmap_value) >> 8;
+                        UINT32 pixel_blue = (((pixel >> blue_offset) & 255) * (256 - bitmap_value) + color_blue * bitmap_value) >> 8;
+                        backbuffer[scaled_y + scaled_x] = (pixel_red << red_offset) + (pixel_green << green_offset) + (pixel_blue << blue_offset);
+                    }
+                    scaled_x++;
+                }
+                scaled_y += screen_width;
+            }
+            screen_x += scale;
+        }
+        screen_y += screen_width * scale;
+        screen_x = x;
+    }
 }
